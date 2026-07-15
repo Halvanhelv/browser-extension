@@ -33,18 +33,32 @@ import {
   removePlaneTimeTrackingButton,
 } from "./utils/plane";
 
+import {
+  isGithubIssuePage,
+  getGithubIssueInfo,
+  getIssueTitleFromDOM as getGithubTitleFromDOM,
+  findGithubSidebar,
+  waitForElement as waitForGithubElement,
+  observeGithubNavigation,
+  observeGithubSidebar,
+  injectGithubTimeTrackingSection,
+  removeGithubTimeTrackingSection,
+} from "./utils/github";
+
 export default defineContentScript({
   matches: [
     "*://linear.app/*",
     "*://app.linear.app/*",
     "*://*.atlassian.net/*",
     "*://app.plane.so/*",
+    "*://github.com/*",
   ],
   main() {
     // Determine which platform we're on
     const isLinear = window.location.hostname.includes("linear.app");
     const isJira = window.location.hostname.includes("atlassian.net");
     const isPlane = window.location.hostname.includes("plane.so");
+    const isGithub = window.location.hostname === "github.com";
 
     if (isLinear) {
       initializeLinear();
@@ -52,6 +66,8 @@ export default defineContentScript({
       initializeJira();
     } else if (isPlane) {
       initializePlane();
+    } else if (isGithub) {
+      initializeGithub();
     }
   },
 });
@@ -249,6 +265,72 @@ function initializePlane() {
 
   // Watch for URL changes (Plane is an SPA)
   observePlaneUrlChanges(() => {
+    handlePageLoad();
+  });
+}
+
+// GitHub integration
+function initializeGithub() {
+  // Keep track of the current observer
+  let sidebarObserver: MutationObserver | null = null;
+
+  // Function to inject time tracking if on a GitHub issue/PR page
+  async function handlePageLoad() {
+    // Disconnect previous observer if it exists
+    if (sidebarObserver) {
+      sidebarObserver.disconnect();
+      sidebarObserver = null;
+    }
+
+    // Check if we're on an issue/PR page
+    if (!isGithubIssuePage()) {
+      removeGithubTimeTrackingSection();
+      return;
+    }
+
+    // Don't inject if already exists
+    if (document.getElementById("solidtime-github-time-tracking-section")) {
+      return;
+    }
+
+    try {
+      // Wait for the sidebar to load
+      const sidebar = await waitForGithubElement(findGithubSidebar, 5000);
+
+      if (!sidebar) {
+        return;
+      }
+
+      // Get issue information
+      const issueInfo = getGithubIssueInfo();
+      if (!issueInfo) {
+        return;
+      }
+
+      // Get the issue title from DOM (more reliable than URL)
+      const issueTitle = getGithubTitleFromDOM() || issueInfo.issueKey;
+
+      // Create issue description for time entry
+      const issueDescription = `${issueInfo.issueKey} ${issueTitle}`;
+
+      // Inject the time tracking section
+      await injectGithubTimeTrackingSection(sidebar, issueDescription);
+
+      // Set up observer to watch for DOM changes that might remove the section
+      sidebarObserver = observeGithubSidebar(issueDescription);
+    } catch (error) {
+      console.error(
+        "Solidtime: Failed to inject GitHub time tracking section:",
+        error,
+      );
+    }
+  }
+
+  // Initial load
+  handlePageLoad();
+
+  // Watch for GitHub's Turbo-driven navigation
+  observeGithubNavigation(() => {
     handlePageLoad();
   });
 }

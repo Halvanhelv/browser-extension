@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useQuery } from "@tanstack/vue-query";
+import { useQuery, useQueryClient } from "@tanstack/vue-query";
 import { computed, onMounted, watch, watchEffect } from "vue";
 import {
     TimeEntryGroupedTable,
@@ -29,6 +29,8 @@ import type {
 // Use shared memberships state
 const { currentOrganizationId, currentMembership, memberships } =
     useMyMemberships();
+
+const queryClient = useQueryClient();
 
 // Fetch time entries
 const { data: timeEntriesResponse } = useQuery({
@@ -135,10 +137,22 @@ async function createClient(clientData: CreateClientBody) {
 
 async function createTimeEntry(entry: Omit<CreateTimeEntryBody, "member_id">) {
     const client = apiClient();
-    await client.createTimeEntry(
+    const response = await client.createTimeEntry(
         { ...entry, member_id: currentMembership.value!.id },
         { params: { organization: currentOrganizationId.value! } },
     );
+    // Starting a timer from a past entry row goes straight to the API and never
+    // touched the shared currentTimeEntry state, so the top TimeTrackerControls
+    // stayed stale (showing idle) until the popup was closed and reopened. Sync
+    // the newly running entry into the shared state and refresh the queries so
+    // the header flips to the active state immediately.
+    if (response?.data) {
+        currentTimeEntry.value = { ...response.data };
+    }
+    await queryClient.invalidateQueries({ queryKey: ["currentTimeEntry"] });
+    await queryClient.invalidateQueries({
+        queryKey: ["timeEntries", currentOrganizationId],
+    });
 }
 
 async function updateTimeEntry(entry: TimeEntry) {

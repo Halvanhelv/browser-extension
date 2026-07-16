@@ -55,6 +55,8 @@ import {
   refreshGithubBoardCardButtons,
 } from "./utils/github";
 
+import { onActiveEntryChange } from "./utils/activeEntry";
+
 export default defineContentScript({
   matches: [
     "*://linear.app/*",
@@ -73,22 +75,28 @@ export default defineContentScript({
     if (isLinear) {
       initializeLinear();
       registerFocusSync(refreshLinearButtonState);
+      // Live update when the popup (or another tab) starts/stops a timer.
+      onActiveEntryChange(() => refreshLinearButtonState());
     } else if (isJira) {
       initializeJira();
       registerFocusSync(refreshJiraButtonState);
+      onActiveEntryChange(() => refreshJiraButtonState());
     } else if (isPlane) {
       initializePlane();
       registerFocusSync(refreshPlaneButtonState);
+      onActiveEntryChange(() => refreshPlaneButtonState());
     } else if (isGithub) {
       initializeGithub();
       initializeGithubProjectPanel();
       initializeGithubProjectCardButtons();
-      registerFocusSync(() => {
+      const syncGithub = () => {
         refreshGithubSidebarButtonState();
         // forceFresh: the timer may have been stopped from the popup while the
-        // tab was hidden, so bypass the board cache to reflect it on return.
+        // tab was hidden, so bypass the board cache to reflect it.
         refreshGithubBoardCardButtons(true);
-      });
+      };
+      registerFocusSync(syncGithub);
+      onActiveEntryChange(syncGithub);
     }
   },
 });

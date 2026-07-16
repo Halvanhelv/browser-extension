@@ -2,11 +2,12 @@
  * Plane-specific utilities for detecting issue pages and extracting issue information
  */
 
-import { apiClient } from "./api";
+import { apiClient, describeToggleError } from "./api";
 import { getCurrentTimeEntry, getLastUsedProjectId } from "./timeEntries";
 import type { CreateTimeEntryBody } from "@solidtime/api";
 import { accessToken } from "./oauth";
 import { dayjs } from "./dayjs";
+import { resolveIsTracking, writeActiveEntry } from "./activeEntry";
 
 export interface PlaneIssueInfo {
   issueKey: string;
@@ -257,18 +258,9 @@ export async function injectPlaneTimeTrackingButton(
     existingButton.remove();
   }
 
-  // Check if there's a current time entry
-  let isTracking = false;
-  try {
-    if (accessToken.value) {
-      const currentEntry = await getCurrentTimeEntry();
-      // Match on description, not just "any timer running" - otherwise starting
-      // a timer on one issue marks every issue's button as tracking.
-      isTracking = currentEntry?.data?.description === issueDescription;
-    }
-  } catch (error) {
-    console.error("Failed to get current time entry:", error);
-  }
+  // Prefer the popup-written storage signal so a timer started/stopped in the
+  // popup is reflected here; falls back to the API on first use.
+  const isTracking = await resolveIsTracking(issueDescription);
 
   // Create the button
   const button = createPlaneTimeTrackingButton(issueDescription, isTracking);
@@ -328,6 +320,8 @@ async function handlePlaneTrackingClick(
           },
         );
       }
+      // Broadcast the stop so the popup and other tabs' buttons revert.
+      await writeActiveEntry(null);
     } else {
       // Start new time entry
       const storage = await browser.storage.local.get([
@@ -356,10 +350,15 @@ async function handlePlaneTrackingClick(
         billable: false,
       };
 
-      await client.createTimeEntry(timeEntryData, {
+      const created = await client.createTimeEntry(timeEntryData, {
         params: {
           organization: organizationId,
         },
+      });
+      // Broadcast the start so the popup and other tabs' buttons reflect it.
+      await writeActiveEntry({
+        id: created?.data?.id ?? "",
+        description: issueDescription,
       });
     }
 
@@ -375,7 +374,7 @@ async function handlePlaneTrackingClick(
   } catch (error) {
     console.error("Failed to toggle time tracking:", error);
     alert(
-      "Failed to toggle time tracking. Please make sure you are logged in.",
+      `Solidtime: failed to toggle time tracking (${describeToggleError(error)})`,
     );
   } finally {
     // Re-enable button

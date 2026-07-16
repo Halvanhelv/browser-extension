@@ -25,6 +25,96 @@ export default defineBackground(() => {
     return [...Array(num)].map(() => Math.random().toString(36)[2]).join("");
   }
 
+  // Cross-context refresh coalescing. Each context (popup, background, every
+  // content script) runs its own copy of the oauth module, so their per-context
+  // single-flight guards don't see each other: two tabs hitting a 401 at once
+  // both POST the same refresh token, Passport rotates it, and the loser gets
+  // invalid_grant -> forced logout. Funnel every refresh through the one
+  // background worker instead.
+  //   - refreshInFlight coalesces concurrent requests for the same token into a
+  //     single POST.
+  //   - lastRotation lets a context that raced in just after a rotation (still
+  //     holding the old token) get the already-issued new tokens back instead of
+  //     re-POSTing a now-invalid token.
+  // Both live in the SW's memory and are best-effort across suspension, which is
+  // fine: they only need to survive the few seconds a refresh burst spans.
+  let refreshInFlight: { token: string; promise: Promise<unknown> } | null =
+    null;
+  let lastRotation: { from: string; result: unknown; at: number } | null = null;
+  const ROTATION_CACHE_MS = 10000;
+
+  async function doRefresh(
+    endpoint: string,
+    clientId: string,
+    refreshToken: string,
+  ): Promise<unknown> {
+    try {
+      const response = await fetch(endpoint + "/oauth/token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: clientId,
+          refresh_token: refreshToken,
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        // Surface the HTTP status so the caller can tell a genuine token
+        // rejection (4xx invalid_grant) from a transient failure (5xx) and only
+        // log the user out on the former.
+        return {
+          success: false,
+          error: data?.error || "Failed to refresh token",
+          status: response.status,
+        };
+      }
+      return { success: true, data };
+    } catch (error) {
+      // Network-level failure: no HTTP status. status: null marks it as
+      // transient so the caller keeps the (still-valid) refresh token.
+      console.error("Token refresh error:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+        status: null,
+      };
+    }
+  }
+
+  async function handleRefresh(
+    endpoint: string,
+    clientId: string,
+    refreshToken: string,
+  ): Promise<unknown> {
+    if (refreshInFlight && refreshInFlight.token === refreshToken) {
+      return refreshInFlight.promise;
+    }
+    if (
+      lastRotation &&
+      lastRotation.from === refreshToken &&
+      Date.now() - lastRotation.at < ROTATION_CACHE_MS
+    ) {
+      return lastRotation.result;
+    }
+
+    const promise = doRefresh(endpoint, clientId, refreshToken);
+    refreshInFlight = { token: refreshToken, promise };
+    try {
+      const result = await promise;
+      if ((result as { success?: boolean })?.success) {
+        lastRotation = { from: refreshToken, result, at: Date.now() };
+      }
+      return result;
+    } finally {
+      if (refreshInFlight?.promise === promise) {
+        refreshInFlight = null;
+      }
+    }
+  }
+
   // Listen for messages from popup or content scripts
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "START_OAUTH_FLOW") {
@@ -126,40 +216,7 @@ export default defineBackground(() => {
 
     if (message.type === "REFRESH_TOKEN") {
       const { endpoint, clientId, refreshToken } = message.payload;
-
-      fetch(endpoint + "/oauth/token", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams({
-          grant_type: "refresh_token",
-          client_id: clientId,
-          refresh_token: refreshToken,
-        }),
-      })
-        .then(async (response) => {
-          const data = await response.json().catch(() => null);
-          if (!response.ok) {
-            // Surface the HTTP status so the caller can tell a genuine token
-            // rejection (4xx invalid_grant) from a transient failure (5xx) and
-            // only log the user out on the former.
-            sendResponse({
-              success: false,
-              error: data?.error || "Failed to refresh token",
-              status: response.status,
-            });
-            return;
-          }
-          sendResponse({ success: true, data });
-        })
-        .catch((error) => {
-          // Network-level failure: no HTTP status. status: null marks it as
-          // transient so the caller keeps the (still-valid) refresh token.
-          console.error("Token refresh error:", error);
-          sendResponse({ success: false, error: error.message, status: null });
-        });
-
+      handleRefresh(endpoint, clientId, refreshToken).then(sendResponse);
       return true;
     }
 

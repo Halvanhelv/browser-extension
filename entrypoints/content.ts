@@ -85,7 +85,9 @@ export default defineContentScript({
       initializeGithubProjectCardButtons();
       registerFocusSync(() => {
         refreshGithubSidebarButtonState();
-        refreshGithubBoardCardButtons();
+        // forceFresh: the timer may have been stopped from the popup while the
+        // tab was hidden, so bypass the board cache to reflect it on return.
+        refreshGithubBoardCardButtons(true);
       });
     }
   },

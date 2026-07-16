@@ -207,9 +207,15 @@ const { currentTimeEntry, lastTimeEntry, isActive, stopTimer, startTimer } =
 const {
     data: currentTimeEntryResponse,
     isError: currentTimeEntryResponseIsError,
+    error: currentTimeEntryResponseError,
 } = useQuery({
     queryKey: ["currentTimeEntry"],
     queryFn: () => getCurrentTimeEntry(),
+    // currentTimeEntry is also the v-model the user types into via
+    // TimeTrackerControls. A focus-triggered refetch would overwrite those
+    // keystrokes, so don't refetch on window focus - edits still persist through
+    // the update mutation, which invalidates this query explicitly.
+    refetchOnWindowFocus: false,
 });
 
 // Update lastTimeEntry when timeEntries change
@@ -224,18 +230,36 @@ watch(
 );
 
 watch(currentTimeEntryResponseIsError, () => {
-    if (currentTimeEntryResponseIsError.value) {
-        // Only reset if we had a previously started timer (has an ID)
-        // Don't reset if user is preparing a new time entry (no ID yet)
-        if (currentTimeEntry.value.id !== '') {
-            currentTimeEntry.value = { ...emptyTimeEntry };
-        }
+    if (!currentTimeEntryResponseIsError.value) {
+        return;
+    }
+    // Only a 404 means the server genuinely has no active timer - reset then.
+    // Transient errors (offline, 5xx) must NOT drop a still-running timer from
+    // the header. And never clobber an unsaved draft (no id yet).
+    const status = (currentTimeEntryResponseError.value as {
+        response?: { status?: number };
+    } | null)?.response?.status;
+    if (status === 404 && currentTimeEntry.value.id !== '') {
+        currentTimeEntry.value = { ...emptyTimeEntry };
     }
 });
 
 watch(currentTimeEntryResponse, () => {
-    if (currentTimeEntryResponse.value?.data) {
-        currentTimeEntry.value = { ...currentTimeEntryResponse.value?.data };
+    const serverEntry = currentTimeEntryResponse.value?.data;
+    if (serverEntry) {
+        // Adopt the server row only when it's a *different* active entry (or we
+        // have none locally). If it's the same entry the user is editing in the
+        // controls, keep local state so an in-flight refetch doesn't discard
+        // keystrokes typed after the debounced update fired.
+        if (currentTimeEntry.value?.id !== serverEntry.id) {
+            currentTimeEntry.value = { ...serverEntry };
+        }
+        return;
+    }
+    // Server explicitly reports no active timer (200 + null). Clear a stale
+    // running entry, but keep an unsaved draft (id === '') the user is preparing.
+    if (currentTimeEntry.value.id !== '') {
+        currentTimeEntry.value = { ...emptyTimeEntry };
     }
 });
 

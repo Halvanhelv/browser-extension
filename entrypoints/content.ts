@@ -33,18 +33,37 @@ import {
   removePlaneTimeTrackingButton,
 } from "./utils/plane";
 
+import {
+  isGithubIssuePage,
+  getGithubIssueInfo,
+  getIssueTitleFromDOM as getGithubTitleFromDOM,
+  findGithubSidebar,
+  waitForElement as waitForGithubElement,
+  observeGithubNavigation,
+  observeGithubSidebar,
+  injectGithubTimeTrackingSection,
+  removeGithubTimeTrackingSection,
+  findGithubProjectPanel,
+  getGithubProjectPanelIssueInfo,
+  observeGithubProjectPanel,
+  isGithubProjectPage,
+  observeGithubBoardCards,
+} from "./utils/github";
+
 export default defineContentScript({
   matches: [
     "*://linear.app/*",
     "*://app.linear.app/*",
     "*://*.atlassian.net/*",
     "*://app.plane.so/*",
+    "*://github.com/*",
   ],
   main() {
     // Determine which platform we're on
     const isLinear = window.location.hostname.includes("linear.app");
     const isJira = window.location.hostname.includes("atlassian.net");
     const isPlane = window.location.hostname.includes("plane.so");
+    const isGithub = window.location.hostname === "github.com";
 
     if (isLinear) {
       initializeLinear();
@@ -52,6 +71,10 @@ export default defineContentScript({
       initializeJira();
     } else if (isPlane) {
       initializePlane();
+    } else if (isGithub) {
+      initializeGithub();
+      initializeGithubProjectPanel();
+      initializeGithubProjectCardButtons();
     }
   },
 });
@@ -251,4 +274,146 @@ function initializePlane() {
   observePlaneUrlChanges(() => {
     handlePageLoad();
   });
+}
+
+// GitHub integration
+function initializeGithub() {
+  // Keep track of the current observer
+  let sidebarObserver: MutationObserver | null = null;
+
+  // Function to inject time tracking if on a GitHub issue/PR page
+  async function handlePageLoad() {
+    // Disconnect previous observer if it exists
+    if (sidebarObserver) {
+      sidebarObserver.disconnect();
+      sidebarObserver = null;
+    }
+
+    // Check if we're on an issue/PR page
+    if (!isGithubIssuePage()) {
+      removeGithubTimeTrackingSection();
+      return;
+    }
+
+    // Don't inject if already exists
+    if (document.getElementById("solidtime-github-time-tracking-section")) {
+      return;
+    }
+
+    try {
+      // Wait for the sidebar to load
+      const sidebar = await waitForGithubElement(findGithubSidebar, 5000);
+
+      if (!sidebar) {
+        return;
+      }
+
+      // Get issue information
+      const issueInfo = getGithubIssueInfo();
+      if (!issueInfo) {
+        return;
+      }
+
+      // Get the issue title from DOM (more reliable than URL)
+      const issueTitle = getGithubTitleFromDOM() || issueInfo.issueKey;
+
+      // Create issue description for time entry
+      const issueDescription = `${issueInfo.issueKey} ${issueTitle}`;
+
+      // Inject the time tracking section
+      await injectGithubTimeTrackingSection(sidebar, issueDescription);
+
+      // Set up observer to watch for DOM changes that might remove the section
+      sidebarObserver = observeGithubSidebar(issueDescription);
+    } catch (error) {
+      console.error(
+        "Solidtime: Failed to inject GitHub time tracking section:",
+        error,
+      );
+    }
+  }
+
+  // Initial load
+  handlePageLoad();
+
+  // Watch for GitHub's Turbo-driven navigation
+  observeGithubNavigation(() => {
+    handlePageLoad();
+  });
+}
+
+// GitHub Projects v2 board - issue side panel integration.
+// Opening a card's side panel is a React Portal mutation (not a Turbo
+// navigation), so this runs independently of initializeGithub().
+function initializeGithubProjectPanel() {
+  let lastPanelIssueKey: string | null = null;
+
+  async function handlePanelChange() {
+    const panel = findGithubProjectPanel();
+
+    if (!panel) {
+      lastPanelIssueKey = null;
+      return;
+    }
+
+    const issueInfo = getGithubProjectPanelIssueInfo();
+    if (!issueInfo) {
+      return;
+    }
+
+    const sectionExists = document.getElementById(
+      "solidtime-github-time-tracking-section",
+    );
+    if (issueInfo.issueKey === lastPanelIssueKey && sectionExists) {
+      return;
+    }
+    lastPanelIssueKey = issueInfo.issueKey;
+
+    try {
+      const sidebar = await waitForGithubElement(
+        () => findGithubSidebar(panel),
+        5000,
+      );
+
+      if (!sidebar) {
+        return;
+      }
+
+      const issueTitle = getGithubTitleFromDOM(panel) || issueInfo.issueKey;
+      const issueDescription = `${issueInfo.issueKey} ${issueTitle}`;
+
+      await injectGithubTimeTrackingSection(sidebar, issueDescription, true);
+    } catch (error) {
+      console.error(
+        "Solidtime: Failed to inject GitHub project panel time tracking section:",
+        error,
+      );
+    }
+  }
+
+  handlePanelChange();
+
+  observeGithubProjectPanel(() => {
+    handlePanelChange();
+  });
+}
+
+// GitHub Projects v2 board - per-card Start/Stop button.
+// Board tab switches (Current/Backlog/All) are React-driven, not Turbo
+// navigations, so a single long-lived observer is started the first time a
+// project page is seen and left running rather than being torn down/rebuilt
+// per navigation.
+function initializeGithubProjectCardButtons() {
+  let boardObserverStarted = false;
+
+  function maybeStartBoardObserver() {
+    if (boardObserverStarted || !isGithubProjectPage()) {
+      return;
+    }
+    boardObserverStarted = true;
+    observeGithubBoardCards();
+  }
+
+  maybeStartBoardObserver();
+  observeGithubNavigation(maybeStartBoardObserver);
 }

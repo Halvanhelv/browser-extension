@@ -94,6 +94,52 @@ function extractGithubClasses(root: ParentNode = document) {
   };
 }
 
+// Solidtime's actual Start/Stop Timer button color (Tailwind sky accent,
+// pulled from @solidtime/ui's styles.css --color-accent-* tokens), so the
+// injected control looks like the real thing instead of a generic bordered box.
+const SOLIDTIME_ACCENT = {
+  dark: {
+    background: "rgba(125, 211, 252, 0.1)",
+    backgroundHover: "rgba(125, 211, 252, 0.2)",
+    border: "rgba(125, 211, 252, 0.3)",
+    text: "rgb(224, 242, 254)",
+  },
+  light: {
+    background: "rgba(2, 132, 199, 0.9)",
+    backgroundHover: "rgb(2, 132, 199)",
+    border: "rgb(2, 132, 199)",
+    text: "#ffffff",
+  },
+};
+
+function isGithubDarkTheme(): boolean {
+  return document.documentElement.getAttribute("data-color-mode") !== "light";
+}
+
+const PLAY_ICON_SVG =
+  '<svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" style="flex-shrink:0;"><path d="M1 0.5v9l8-4.5z"></path></svg>';
+const STOP_ICON_SVG =
+  '<svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" style="flex-shrink:0;"><rect x="1" y="1" width="8" height="8" rx="1.5"></rect></svg>';
+
+function styleGithubTimeTrackingButton(
+  button: HTMLButtonElement,
+  isTracking: boolean,
+): void {
+  const theme = isGithubDarkTheme()
+    ? SOLIDTIME_ACCENT.dark
+    : SOLIDTIME_ACCENT.light;
+
+  button.style.cssText = `display: inline-flex; align-items: center; gap: 6px; padding: 5px 14px; margin-top: 8px; border-radius: 9999px; border: 1px solid ${theme.border}; background: ${theme.background}; color: ${theme.text}; font-size: 12px; font-weight: 500; line-height: 1; cursor: pointer; transition: background-color 0.15s ease;`;
+  button.innerHTML = `${isTracking ? STOP_ICON_SVG : PLAY_ICON_SVG}<span>${isTracking ? "Stop Timer" : "Start Timer"}</span>`;
+
+  button.onmouseenter = () => {
+    button.style.backgroundColor = theme.backgroundHover;
+  };
+  button.onmouseleave = () => {
+    button.style.backgroundColor = theme.background;
+  };
+}
+
 /**
  * Creates the Time Tracking sidebar section
  */
@@ -115,9 +161,7 @@ function createGithubTimeTrackingSection(
   const button = document.createElement("button");
   button.id = BUTTON_ID;
   button.type = "button";
-  button.textContent = isTracking ? "Stop Timer" : "Start Timer";
-  button.style.cssText =
-    "display: inline-flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--borderColor-default, #d0d7de); font-size: 12px; cursor: pointer; margin-top: 4px;";
+  styleGithubTimeTrackingButton(button, isTracking);
 
   section.appendChild(button);
 

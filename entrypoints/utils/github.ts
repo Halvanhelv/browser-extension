@@ -155,7 +155,10 @@ export async function injectGithubTimeTrackingSection(
     issueDescription,
     isTracking,
   );
-  sidebar.appendChild(section);
+  // Prepend rather than append - GitHub's sidebar can run long (Assignees,
+  // Labels, Projects, Milestone, Development, Notifications...), so appending
+  // buries the section below the fold on most issues.
+  sidebar.prepend(section);
 
   const button = document.getElementById(BUTTON_ID);
   if (button) {

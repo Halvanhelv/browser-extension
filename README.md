@@ -2,12 +2,16 @@
 
 The official browser extension for [Solidtime](https://www.solidtime.io) - the modern open-source time tracker.
 
-Track time directly from your project management tools with seamless integration into Linear, Jira, Plane, and GitHub Issues.
+Track time directly from your project management tools with seamless integration into Linear, Jira, Plane, GitHub Issues/PRs, and GitHub Projects (v2).
 
 ## Download
 
 - **Chrome/Edge/Brave:** [Chrome Web Store](https://chromewebstore.google.com/detail/solidtime/hpanifeankiobmgbemnhjmhpjeebdhdd)
 - **Firefox:** [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/solidtime/)
+- **Manual install (this fork):** grab the latest zip from [GitHub Releases](https://github.com/Halvanhelv/browser-extension/releases) and load it unpacked:
+  1. Download `solidtime-browser-extension-<version>-chrome.zip` (or `-firefox.zip`) and unzip it
+  2. **Chrome/Edge/Brave:** open `chrome://extensions`, enable Developer mode, click "Load unpacked", select the unzipped folder
+  3. **Firefox:** open `about:debugging#/runtime/this-firefox`, click "Load Temporary Add-on", select `manifest.json` inside the unzipped folder (temporary - reload after each browser restart, or package as a signed `.xpi` for a permanent install)
 
 ## Features
 
@@ -25,7 +29,8 @@ Track time directly from your project management tools with seamless integration
 | Linear |<img  alt="Screenshot 2025-12-17 at 16 13 10" src="https://github.com/user-attachments/assets/3324196b-61f7-4b66-b2af-b7007de7e3a6" /> |
 | Jira | <img alt="Screenshot 2025-12-17 at 16 22 20" src="https://github.com/user-attachments/assets/d3d24ff0-6a87-44cc-a7f6-0fce459a5456" /> |
 | Plane | <img alt="Screenshot 2025-12-17 at 16 23 54" src="https://github.com/user-attachments/assets/716570b8-7f30-4475-9f42-403ae5894b2e" /> |
-| GitHub Issues | Sidebar section, alongside Assignees/Labels/Projects |
+| GitHub Issues/PRs | Sidebar section, alongside Assignees/Labels/Projects |
+| GitHub Projects (v2) | Compact Start/Stop button on each board card, plus the full sidebar section inside the card's side panel |
 
 
 More coming soon!

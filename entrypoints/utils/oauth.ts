@@ -91,23 +91,34 @@ export async function refreshAccessToken(): Promise<void> {
         },
       });
 
-      if (!response.success) {
-        throw new Error(response.error || "Failed to refresh token");
+      if (!response || !response.success) {
+        // Only a genuine token rejection (4xx invalid_grant) should log the
+        // user out. Transient failures - offline, a 5xx, or the background
+        // worker being asleep (undefined response / null status) - must NOT
+        // wipe a still-valid refresh token, or a momentary blip forces a
+        // full re-login.
+        const tokenRejected =
+          response?.status === 400 || response?.status === 401;
+        if (tokenRejected) {
+          accessToken.value = "";
+          refreshToken.value = "";
+          await browser.storage.local.remove(["access_token", "refresh_token"]);
+        }
+        throw new Error(response?.error || "Failed to refresh token");
       }
 
-      // Update tokens
+      // Passport rotates the refresh token on use, but if a response ever omits
+      // one, keep the current token rather than clobbering it with undefined.
+      const newRefreshToken =
+        response.data.refresh_token ?? currentRefreshToken;
+
       await browser.storage.local.set({
         access_token: response.data.access_token,
-        refresh_token: response.data.refresh_token,
+        refresh_token: newRefreshToken,
       });
 
       accessToken.value = response.data.access_token;
-      refreshToken.value = response.data.refresh_token;
-    } catch (error) {
-      accessToken.value = "";
-      refreshToken.value = "";
-      await browser.storage.local.remove(["access_token", "refresh_token"]);
-      throw error;
+      refreshToken.value = newRefreshToken;
     } finally {
       refreshPromise = null;
     }
@@ -117,30 +128,20 @@ export async function refreshAccessToken(): Promise<void> {
 }
 
 export async function startOAuthFlow(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    browser.runtime.sendMessage(
-      {
-        type: "START_OAUTH_FLOW",
-        payload: {
-          endpoint: endpoint.value,
-          clientId: clientId.value,
-        },
-      },
-      (response) => {
-        if (browser.runtime.lastError) {
-          reject(new Error(browser.runtime.lastError.message));
-          return;
-        }
-
-        if (!response.success) {
-          reject(new Error(response.error || "OAuth failed"));
-          return;
-        }
-
-        resolve();
-      },
-    );
+  // Use the promise form of sendMessage (not the Chrome-only callback form) so
+  // the login flow also resolves on Firefox, whose native runtime.sendMessage is
+  // promise-only and would otherwise never invoke the callback (login hangs).
+  const response = await browser.runtime.sendMessage({
+    type: "START_OAUTH_FLOW",
+    payload: {
+      endpoint: endpoint.value,
+      clientId: clientId.value,
+    },
   });
+
+  if (!response || !response.success) {
+    throw new Error(response?.error || "OAuth failed");
+  }
 }
 
 export async function logout() {

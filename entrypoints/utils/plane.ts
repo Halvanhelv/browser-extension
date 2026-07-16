@@ -3,7 +3,7 @@
  */
 
 import { apiClient } from "./api";
-import { getCurrentTimeEntry } from "./timeEntries";
+import { getCurrentTimeEntry, getLastUsedProjectId } from "./timeEntries";
 import type { CreateTimeEntryBody } from "@solidtime/api";
 import { accessToken } from "./oauth";
 import { dayjs } from "./dayjs";
@@ -262,7 +262,9 @@ export async function injectPlaneTimeTrackingButton(
   try {
     if (accessToken.value) {
       const currentEntry = await getCurrentTimeEntry();
-      isTracking = currentEntry?.data?.id ? true : false;
+      // Match on description, not just "any timer running" - otherwise starting
+      // a timer on one issue marks every issue's button as tracking.
+      isTracking = currentEntry?.data?.description === issueDescription;
     }
   } catch (error) {
     console.error("Failed to get current time entry:", error);
@@ -277,6 +279,9 @@ export async function injectPlaneTimeTrackingButton(
   // Add click handler
   const buttonElement = document.getElementById(BUTTON_ID);
   if (buttonElement) {
+    // Stash the description so the focus-driven resync can recompute whether
+    // this issue is the one currently being tracked without a captured closure.
+    buttonElement.dataset.issueDescription = issueDescription;
     buttonElement.addEventListener("click", () =>
       handlePlaneTrackingClick(issueDescription, isTracking),
     );
@@ -329,16 +334,23 @@ async function handlePlaneTrackingClick(
         "current_organization_id",
         "currentMembershipId",
       ]);
-      const organizationId = storage.current_organization_id;
-      const membershipId = storage.currentMembershipId;
+      const organizationId = storage.current_organization_id as
+        | string
+        | undefined;
+      const membershipId = storage.currentMembershipId as string | undefined;
 
       if (!organizationId || !membershipId) {
         alert("Please select an organization in the Solidtime extension first");
         return;
       }
 
+      // Default to the last-used project instead of "No Project", matching the
+      // popup and the GitHub button behaviour.
+      const projectId = await getLastUsedProjectId(organizationId, membershipId);
+
       const timeEntryData: CreateTimeEntryBody = {
         member_id: membershipId,
+        project_id: projectId,
         description: issueDescription,
         start: dayjs.utc().format(),
         billable: false,
@@ -373,6 +385,27 @@ async function handlePlaneTrackingClick(
       button.style.cursor = "pointer";
     }
   }
+}
+
+/**
+ * Re-checks whether the injected button's issue is the one currently being
+ * tracked and re-renders it to match. Called when the Plane tab regains focus,
+ * so stopping a timer from the extension popup (a separate context the content
+ * script can't observe) is reflected back on the page button.
+ */
+export async function refreshPlaneButtonState(): Promise<void> {
+  const button = document.getElementById(BUTTON_ID);
+  if (!button) {
+    return;
+  }
+
+  const issueDescription = button.dataset.issueDescription || "";
+  const actionsWrapper = findPlaneActionsWrapper();
+  if (!actionsWrapper) {
+    return;
+  }
+
+  await injectPlaneTimeTrackingButton(actionsWrapper, issueDescription, true);
 }
 
 /**

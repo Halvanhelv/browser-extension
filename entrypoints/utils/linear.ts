@@ -3,7 +3,7 @@
  */
 
 import { apiClient } from "./api";
-import { getCurrentTimeEntry } from "./timeEntries";
+import { getCurrentTimeEntry, getLastUsedProjectId } from "./timeEntries";
 import type { CreateTimeEntryBody } from "@solidtime/api";
 import { accessToken } from "./oauth";
 import { dayjs } from "./dayjs";
@@ -350,7 +350,9 @@ export async function injectTimeTrackingSection(
   try {
     if (accessToken.value) {
       const currentEntry = await getCurrentTimeEntry();
-      isTracking = currentEntry?.data?.id ? true : false;
+      // Match on description, not just "any timer running" - otherwise starting
+      // a timer on one issue marks every issue's button as tracking.
+      isTracking = currentEntry?.data?.description === issueDescription;
     }
   } catch (error) {
     console.error("Failed to get current time entry:", error);
@@ -358,6 +360,9 @@ export async function injectTimeTrackingSection(
 
   // Create the section
   const section = createTimeTrackingSection(issueDescription, isTracking);
+  // Stash the description so the focus-driven resync can recompute whether this
+  // issue is the one currently being tracked without a captured closure.
+  section.dataset.issueDescription = issueDescription;
 
   // Find the Project section and insert after it
   const projectSection = Array.from(container.children).find((child) => {
@@ -432,16 +437,23 @@ async function handleTrackingClick(
         "current_organization_id",
         "currentMembershipId",
       ]);
-      const organizationId = storage.current_organization_id;
-      const membershipId = storage.currentMembershipId;
+      const organizationId = storage.current_organization_id as
+        | string
+        | undefined;
+      const membershipId = storage.currentMembershipId as string | undefined;
 
       if (!organizationId || !membershipId) {
         alert("Please select an organization in the Solidtime extension first");
         return;
       }
 
+      // Default to the last-used project instead of "No Project", matching the
+      // popup and the GitHub button behaviour.
+      const projectId = await getLastUsedProjectId(organizationId, membershipId);
+
       const timeEntryData: CreateTimeEntryBody = {
         member_id: membershipId,
+        project_id: projectId,
         description: issueDescription,
         start: dayjs.utc().format(),
         billable: false,
@@ -476,6 +488,27 @@ async function handleTrackingClick(
       button.style.cursor = "pointer";
     }
   }
+}
+
+/**
+ * Re-checks whether the injected section's issue is the one currently being
+ * tracked and re-renders it to match. Called when the Linear tab regains focus,
+ * so stopping a timer from the extension popup (a separate context the content
+ * script can't observe) is reflected back on the page control.
+ */
+export async function refreshLinearButtonState(): Promise<void> {
+  const section = document.getElementById(SECTION_ID);
+  if (!section) {
+    return;
+  }
+
+  const issueDescription = section.dataset.issueDescription || "";
+  const propertiesSidebar = findPropertiesSidebar();
+  if (!propertiesSidebar) {
+    return;
+  }
+
+  await injectTimeTrackingSection(propertiesSidebar, issueDescription, true);
 }
 
 /**

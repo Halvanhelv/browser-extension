@@ -52,85 +52,66 @@ export default defineBackground(() => {
             oauthChallenge +
             "&code_challenge_method=S256&scope=*";
 
-          // Launch OAuth flow
-          browser.identity.launchWebAuthFlow(
-            {
-              url: loginUrl,
-              interactive: true,
+          // Launch OAuth flow. Use the promise form (not the Chrome-only
+          // callback form) so it also resolves on Firefox, whose native
+          // identity.launchWebAuthFlow is promise-only and ignores a callback.
+          const responseUrl = await browser.identity.launchWebAuthFlow({
+            url: loginUrl,
+            interactive: true,
+          });
+
+          if (!responseUrl) {
+            sendResponse({ success: false, error: "No response URL" });
+            return;
+          }
+
+          const url = new URL(responseUrl);
+          const code = url.searchParams.get("code");
+          const responseState = url.searchParams.get("state");
+          const error = url.searchParams.get("error");
+
+          if (error) {
+            throw new Error(`OAuth error: ${error}`);
+          }
+
+          if (responseState !== oauthState || !code) {
+            throw new Error("Invalid state or missing code");
+          }
+
+          // Exchange code for tokens
+          const tokenResponse = await fetch(endpoint + "/oauth/token", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
             },
-            async (responseUrl) => {
-              if (browser.runtime.lastError) {
-                console.error("OAuth error:", browser.runtime.lastError);
-                sendResponse({
-                  success: false,
-                  error: browser.runtime.lastError.message || "OAuth failed",
-                });
-                return;
-              }
+            body: new URLSearchParams({
+              grant_type: "authorization_code",
+              client_id: clientId,
+              redirect_uri: redirectUrl,
+              code_verifier: oauthVerifier,
+              code: code,
+            }),
+          });
 
-              if (!responseUrl) {
-                sendResponse({ success: false, error: "No response URL" });
-                return;
-              }
+          if (!tokenResponse.ok) {
+            throw new Error("Token exchange failed");
+          }
 
-              try {
-                const url = new URL(responseUrl);
-                const code = url.searchParams.get("code");
-                const responseState = url.searchParams.get("state");
-                const error = url.searchParams.get("error");
+          const tokens = await tokenResponse.json();
 
-                if (error) {
-                  throw new Error(`OAuth error: ${error}`);
-                }
+          // Store tokens in chrome.storage
+          await browser.storage.local.set({
+            access_token: tokens.access_token,
+            refresh_token: tokens.refresh_token,
+          });
 
-                if (responseState !== oauthState || !code) {
-                  throw new Error("Invalid state or missing code");
-                }
-
-                // Exchange code for tokens
-                const tokenResponse = await fetch(endpoint + "/oauth/token", {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/x-www-form-urlencoded",
-                  },
-                  body: new URLSearchParams({
-                    grant_type: "authorization_code",
-                    client_id: clientId,
-                    redirect_uri: redirectUrl,
-                    code_verifier: oauthVerifier,
-                    code: code,
-                  }),
-                });
-
-                if (!tokenResponse.ok) {
-                  throw new Error("Token exchange failed");
-                }
-
-                const tokens = await tokenResponse.json();
-
-                // Store tokens in chrome.storage
-                await browser.storage.local.set({
-                  access_token: tokens.access_token,
-                  refresh_token: tokens.refresh_token,
-                });
-
-                sendResponse({
-                  success: true,
-                  data: {
-                    access_token: tokens.access_token,
-                    refresh_token: tokens.refresh_token,
-                  },
-                });
-              } catch (error) {
-                console.error("OAuth error:", error);
-                sendResponse({
-                  success: false,
-                  error:
-                    error instanceof Error ? error.message : "Unknown error",
-                });
-              }
+          sendResponse({
+            success: true,
+            data: {
+              access_token: tokens.access_token,
+              refresh_token: tokens.refresh_token,
             },
-          );
+          });
         } catch (error) {
           console.error("OAuth initialization error:", error);
           sendResponse({
@@ -158,17 +139,25 @@ export default defineBackground(() => {
         }),
       })
         .then(async (response) => {
+          const data = await response.json().catch(() => null);
           if (!response.ok) {
-            throw new Error("Failed to refresh token");
+            // Surface the HTTP status so the caller can tell a genuine token
+            // rejection (4xx invalid_grant) from a transient failure (5xx) and
+            // only log the user out on the former.
+            sendResponse({
+              success: false,
+              error: data?.error || "Failed to refresh token",
+              status: response.status,
+            });
+            return;
           }
-          return response.json();
-        })
-        .then((data) => {
           sendResponse({ success: true, data });
         })
         .catch((error) => {
+          // Network-level failure: no HTTP status. status: null marks it as
+          // transient so the caller keeps the (still-valid) refresh token.
           console.error("Token refresh error:", error);
-          sendResponse({ success: false, error: error.message });
+          sendResponse({ success: false, error: error.message, status: null });
         });
 
       return true;

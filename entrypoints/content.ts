@@ -347,29 +347,45 @@ function initializeGithub() {
 // navigation), so this runs independently of initializeGithub().
 function initializeGithubProjectPanel() {
   let lastPanelIssueKey: string | null = null;
+  // The panel is a React Portal that renders over several discrete DOM
+  // mutations (not one atomic swap), so the MutationObserver callback fires
+  // many times while it's still mounting. Without a re-entrancy guard, each
+  // of those calls races the "does the section already exist" check before
+  // the previous call has actually inserted it, and each one wins that race -
+  // injecting its own copy. Single-flight + trailing rerun avoids that while
+  // still catching the panel's final settled state.
+  let isHandlingPanelChange = false;
+  let pendingRerun = false;
 
   async function handlePanelChange() {
-    const panel = findGithubProjectPanel();
-
-    if (!panel) {
-      lastPanelIssueKey = null;
+    if (isHandlingPanelChange) {
+      pendingRerun = true;
       return;
     }
-
-    const issueInfo = getGithubProjectPanelIssueInfo();
-    if (!issueInfo) {
-      return;
-    }
-
-    const sectionExists = document.getElementById(
-      "solidtime-github-time-tracking-section",
-    );
-    if (issueInfo.issueKey === lastPanelIssueKey && sectionExists) {
-      return;
-    }
-    lastPanelIssueKey = issueInfo.issueKey;
+    isHandlingPanelChange = true;
+    pendingRerun = false;
 
     try {
+      const panel = findGithubProjectPanel();
+
+      if (!panel) {
+        lastPanelIssueKey = null;
+        return;
+      }
+
+      const issueInfo = getGithubProjectPanelIssueInfo();
+      if (!issueInfo) {
+        return;
+      }
+
+      const sectionExists = document.getElementById(
+        "solidtime-github-time-tracking-section",
+      );
+      if (issueInfo.issueKey === lastPanelIssueKey && sectionExists) {
+        return;
+      }
+      lastPanelIssueKey = issueInfo.issueKey;
+
       const sidebar = await waitForGithubElement(
         () => findGithubSidebar(panel),
         5000,
@@ -388,6 +404,11 @@ function initializeGithubProjectPanel() {
         "Solidtime: Failed to inject GitHub project panel time tracking section:",
         error,
       );
+    } finally {
+      isHandlingPanelChange = false;
+      if (pendingRerun) {
+        handlePanelChange();
+      }
     }
   }
 

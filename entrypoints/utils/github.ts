@@ -193,13 +193,14 @@ export async function injectGithubTimeTrackingSection(
     return;
   }
 
-  if (existingSection) {
-    existingSection.remove();
-  }
-
   // Prefer the popup-written storage signal so a timer started/stopped in the
-  // popup is reflected here; falls back to the API on first use.
+  // popup is reflected here; falls back to the API on first use. Resolve BEFORE
+  // removing the old node: this awaits (a storage round-trip), and the removal
+  // observer would see the section missing and inject a duplicate. Remove +
+  // insert happen synchronously below, so the observer never sees a gap.
   const isTracking = await resolveIsTracking(issueDescription);
+
+  document.getElementById(SECTION_ID)?.remove();
 
   const section = createGithubTimeTrackingSection(
     issueDescription,
@@ -259,21 +260,35 @@ async function toggleGithubTimeEntry(
   if (isCurrentlyTracking) {
     const currentEntry = await getCurrentTimeEntry();
     if (currentEntry?.data?.id) {
-      await client.updateTimeEntry(
-        {
-          ...currentEntry.data,
-          end: dayjs.utc().format(),
-        },
-        {
-          params: {
-            organization: currentEntry.data.organization_id,
-            timeEntry: currentEntry.data.id,
+      // Only stop the running timer if it's actually this issue's. Storage can
+      // be stale (a timer stopped/started outside the extension), which would
+      // otherwise make this "Stop" end an unrelated running timer.
+      if (currentEntry.data.description === issueDescription) {
+        await client.updateTimeEntry(
+          {
+            ...currentEntry.data,
+            end: dayjs.utc().format(),
           },
-        },
-      );
+          {
+            params: {
+              organization: currentEntry.data.organization_id,
+              timeEntry: currentEntry.data.id,
+            },
+          },
+        );
+        await writeActiveEntry(null);
+      } else {
+        // A different timer is running - don't touch it; just reconcile storage
+        // to reality so this issue's button corrects to "Start".
+        await writeActiveEntry({
+          id: currentEntry.data.id,
+          description: currentEntry.data.description ?? "",
+        });
+      }
+    } else {
+      // Nothing is running; clear stale storage.
+      await writeActiveEntry(null);
     }
-    // Broadcast the stop so the popup and other tabs' buttons revert.
-    await writeActiveEntry(null);
     return;
   }
 

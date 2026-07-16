@@ -31,11 +31,12 @@ const tempClientId = ref(clientId.value);
 
 // endpoint/clientId are loaded asynchronously from chrome.storage after mount,
 // so the initial snapshot above can still hold the cloud defaults. Re-seed the
-// fields every time the modal opens, otherwise a self-hosted user sees the
-// defaults and Saving would overwrite their real instance config with them.
+// fields whenever the modal opens AND whenever the stored values change while
+// it's open - otherwise, if the modal opens before the async load resolves, a
+// self-hosted user sees the defaults and Saving overwrites their real config.
 watch(
-    () => props.show,
-    (show) => {
+    [() => props.show, endpoint, clientId],
+    ([show]) => {
         if (show) {
             tempEndpoint.value = endpoint.value;
             tempClientId.value = clientId.value;

@@ -213,6 +213,30 @@ export async function injectGithubTimeTrackingSection(
 }
 
 /**
+ * Finds the project of the user's most recent time entry so a timer started
+ * from a GitHub button lands in that project rather than "No Project".
+ * Returns null (No Project) if nothing recent has a project or the lookup fails.
+ */
+async function getLastUsedProjectId(
+  client: ReturnType<typeof apiClient>,
+  organizationId: string,
+  membershipId: string,
+): Promise<string | null> {
+  try {
+    const response = await client.getTimeEntries({
+      params: { organization: organizationId },
+      queries: { member_id: membershipId, limit: 10 },
+    });
+    const entries = response?.data ?? [];
+    const lastWithProject = entries.find((entry) => entry.project_id);
+    return lastWithProject?.project_id ?? null;
+  } catch (error) {
+    console.error("Solidtime: Failed to fetch last used project:", error);
+    return null;
+  }
+}
+
+/**
  * Starts or stops a Solidtime time entry for the given issue description.
  * Shared by the sidebar Start/Stop button and the board card buttons -
  * throws on failure so each caller can render its own error UI.
@@ -250,15 +274,25 @@ async function toggleGithubTimeEntry(
     "current_organization_id",
     "currentMembershipId",
   ]);
-  const organizationId = storage.current_organization_id;
-  const membershipId = storage.currentMembershipId;
+  const organizationId = storage.current_organization_id as string | undefined;
+  const membershipId = storage.currentMembershipId as string | undefined;
 
   if (!organizationId || !membershipId) {
     throw new Error("no_organization");
   }
 
+  // Default to the project the user last tracked against instead of "No
+  // Project" - starting a timer from a GitHub button carries no project context,
+  // so reuse the most recent entry's project to match the popup's behaviour.
+  const projectId = await getLastUsedProjectId(
+    client,
+    organizationId,
+    membershipId,
+  );
+
   const timeEntryData: CreateTimeEntryBody = {
     member_id: membershipId,
+    project_id: projectId,
     description: issueDescription,
     start: dayjs.utc().format(),
     billable: false,

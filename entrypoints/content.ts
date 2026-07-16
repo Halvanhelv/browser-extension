@@ -7,6 +7,7 @@ import {
   observeUrlChanges as observeLinearUrlChanges,
   injectTimeTrackingSection,
   removeTimeTrackingSection,
+  refreshLinearButtonState,
 } from "./utils/linear";
 
 import {
@@ -19,6 +20,7 @@ import {
   observeJiraActionsWrapper,
   injectJiraTimeTrackingButton,
   removeJiraTimeTrackingButton,
+  refreshJiraButtonState,
 } from "./utils/jira";
 
 import {
@@ -31,6 +33,7 @@ import {
   observePlaneActionsWrapper,
   injectPlaneTimeTrackingButton,
   removePlaneTimeTrackingButton,
+  refreshPlaneButtonState,
 } from "./utils/plane";
 
 import {
@@ -69,15 +72,21 @@ export default defineContentScript({
 
     if (isLinear) {
       initializeLinear();
+      registerFocusSync(refreshLinearButtonState);
     } else if (isJira) {
       initializeJira();
+      registerFocusSync(refreshJiraButtonState);
     } else if (isPlane) {
       initializePlane();
+      registerFocusSync(refreshPlaneButtonState);
     } else if (isGithub) {
       initializeGithub();
       initializeGithubProjectPanel();
       initializeGithubProjectCardButtons();
-      initializeGithubFocusSync();
+      registerFocusSync(() => {
+        refreshGithubSidebarButtonState();
+        refreshGithubBoardCardButtons();
+      });
     }
   },
 });
@@ -422,18 +431,17 @@ function initializeGithubProjectPanel() {
   });
 }
 
-// Re-syncs injected GitHub button state when the tab regains focus. Stopping a
-// timer from the extension popup happens in a separate context the content
-// script can't observe, so the sidebar/board buttons would otherwise stay stuck
-// on "Stop Timer" until the next navigation. Both refreshers no-op when their
-// targets aren't present, so this is safe on any GitHub page.
-function initializeGithubFocusSync() {
+// Re-runs a platform's button-state refresher whenever the tab regains focus.
+// Stopping a timer from the extension popup happens in a separate context the
+// content script can't observe, so an injected button would otherwise stay stuck
+// on "Stop Timer" until the next navigation. Refreshers no-op when their targets
+// aren't present, so this is safe on any page of the host.
+function registerFocusSync(refresh: () => void) {
   const sync = () => {
     if (document.visibilityState !== "visible") {
       return;
     }
-    refreshGithubSidebarButtonState();
-    refreshGithubBoardCardButtons();
+    refresh();
   };
 
   document.addEventListener("visibilitychange", sync);

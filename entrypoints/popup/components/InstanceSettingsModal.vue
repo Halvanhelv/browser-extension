@@ -7,9 +7,9 @@ import {
     InputLabel,
 } from "@solidtime/ui";
 import { endpoint, clientId } from "../../utils/oauth";
-import { ref } from "vue";
+import { ref, watch } from "vue";
 
-defineProps({
+const props = defineProps({
     show: {
         type: Boolean,
         default: false,
@@ -28,6 +28,20 @@ const emit = defineEmits(["close"]);
 
 const tempEndpoint = ref(endpoint.value);
 const tempClientId = ref(clientId.value);
+
+// endpoint/clientId are loaded asynchronously from chrome.storage after mount,
+// so the initial snapshot above can still hold the cloud defaults. Re-seed the
+// fields every time the modal opens, otherwise a self-hosted user sees the
+// defaults and Saving would overwrite their real instance config with them.
+watch(
+    () => props.show,
+    (show) => {
+        if (show) {
+            tempEndpoint.value = endpoint.value;
+            tempClientId.value = clientId.value;
+        }
+    },
+);
 
 const close = () => {
     emit("close");

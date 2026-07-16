@@ -29,6 +29,31 @@ export function getCurrentTimeEntry() {
     return client.getMyActiveTimeEntry({})
 }
 
+/**
+ * Finds the project of the user's most recent time entry so a timer started
+ * from an injected page button lands in that project rather than "No Project".
+ * Returns null (No Project) if nothing recent has a project or the lookup fails.
+ * Shared by every host-page integration (GitHub, Jira, Linear, Plane).
+ */
+export async function getLastUsedProjectId(
+    organizationId: string,
+    membershipId: string
+): Promise<string | null> {
+    try {
+        const client = apiClient()
+        const response = await client.getTimeEntries({
+            params: { organization: organizationId },
+            queries: { member_id: membershipId, limit: 10 },
+        })
+        const entries = response?.data ?? []
+        const lastWithProject = entries.find((entry) => entry.project_id)
+        return lastWithProject?.project_id ?? null
+    } catch (error) {
+        console.error('Solidtime: Failed to fetch last used project:', error)
+        return null
+    }
+}
+
 export function useTimeEntryStopMutation() {
     const queryClient = useQueryClient()
     const { currentOrganizationId } = useMyMemberships()

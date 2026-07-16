@@ -22,7 +22,13 @@ export default defineBackground(() => {
   }
 
   function createRandomString(num: number) {
-    return [...Array(num)].map(() => Math.random().toString(36)[2]).join("");
+    // Cryptographically-random string for the PKCE code_verifier and OAuth
+    // state. Math.random() is not suitable for security tokens (predictable,
+    // and Math.random().toString(36)[2] can even be undefined). One base36 char
+    // per random byte keeps the verifier within RFC 7636's 43-128 char range.
+    const bytes = new Uint8Array(num);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => (b % 36).toString(36)).join("");
   }
 
   // Cross-context refresh coalescing. Each context (popup, background, every

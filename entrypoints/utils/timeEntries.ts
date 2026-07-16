@@ -41,13 +41,24 @@ export async function getLastUsedProjectId(
 ): Promise<string | null> {
     try {
         const client = apiClient()
-        const response = await client.getTimeEntries({
-            params: { organization: organizationId },
-            queries: { member_id: membershipId, limit: 10 },
-        })
-        const entries = response?.data ?? []
-        const lastWithProject = entries.find((entry) => entry.project_id)
-        return lastWithProject?.project_id ?? null
+        const [entriesResponse, projectsResponse] = await Promise.all([
+            client.getTimeEntries({
+                params: { organization: organizationId },
+                queries: { member_id: membershipId, limit: 10 },
+            }),
+            client.getProjects({ params: { organization: organizationId } }),
+        ])
+        const entries = entriesResponse?.data ?? []
+        // Only reuse a project that still exists in the org's current project
+        // list, so a timer started from a page button can't 422 on a project
+        // that was since archived or deleted.
+        const validProjectIds = new Set(
+            (projectsResponse?.data ?? []).map((project) => project.id)
+        )
+        const lastValid = entries.find(
+            (entry) => entry.project_id && validProjectIds.has(entry.project_id)
+        )
+        return lastValid?.project_id ?? null
     } catch (error) {
         console.error('Solidtime: Failed to fetch last used project:', error)
         return null

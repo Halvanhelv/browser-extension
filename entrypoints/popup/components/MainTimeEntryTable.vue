@@ -17,7 +17,10 @@ import { useLiveTimer } from "../../utils/liveTimer";
 import { useCurrentTimeEntryUpdateMutation } from "../../utils/timeEntries";
 import { getCurrentTimeEntry } from "../../utils/timeEntries";
 import { emptyTimeEntry } from "../../utils/timeEntries";
-import { writeActiveEntry } from "../../utils/activeEntry";
+import {
+    writeActiveEntry,
+    onActiveEntryChange,
+} from "../../utils/activeEntry";
 import { dayjs } from "../../utils/dayjs";
 import type {
     CreateClientBody,
@@ -287,6 +290,20 @@ watchEffect(() => {
     } else {
         stopLiveTimer();
     }
+});
+
+// A timer started/stopped from a host-page button (another context) updates the
+// shared st_active_entry storage. Refresh the header when that happens, unless it
+// already matches our current entry (our own write echoing back).
+onActiveEntryChange((description) => {
+    const current = currentTimeEntry.value?.description ?? null;
+    if (description === current) {
+        return;
+    }
+    queryClient.invalidateQueries({ queryKey: ["currentTimeEntry"] });
+    queryClient.invalidateQueries({
+        queryKey: ["timeEntries", currentOrganizationId],
+    });
 });
 
 onMounted(async () => {

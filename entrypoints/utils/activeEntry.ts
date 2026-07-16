@@ -54,12 +54,19 @@ export async function writeActiveEntry(
 export async function readActiveEntryDescription(): Promise<
   string | null | undefined
 > {
-  const result = await browser.storage.local.get(ACTIVE_ENTRY_KEY);
-  if (!(ACTIVE_ENTRY_KEY in result)) {
+  try {
+    const result = await browser.storage.local.get(ACTIVE_ENTRY_KEY);
+    if (!(ACTIVE_ENTRY_KEY in result)) {
+      return undefined;
+    }
+    const entry = result[ACTIVE_ENTRY_KEY] as StoredActiveEntry | null;
+    return entry?.description ?? null;
+  } catch (error) {
+    // Treat a storage read failure as "unknown" so callers fall back to the API
+    // rather than surfacing an unhandled rejection.
+    console.error("Solidtime: Failed to read active entry:", error);
     return undefined;
   }
-  const entry = result[ACTIVE_ENTRY_KEY] as StoredActiveEntry | null;
-  return entry?.description ?? null;
 }
 
 /**

@@ -147,5 +147,12 @@ export async function startOAuthFlow(): Promise<void> {
 export async function logout() {
   accessToken.value = "";
   refreshToken.value = "";
-  await browser.storage.local.remove(["access_token", "refresh_token"]);
+  // Also drop the active-timer signal (key from activeEntry.ts, inlined to avoid
+  // an import cycle) so injected page buttons don't show a stale "Stop" state
+  // for a logged-out user.
+  await browser.storage.local.remove([
+    "access_token",
+    "refresh_token",
+    "st_active_entry",
+  ]);
 }

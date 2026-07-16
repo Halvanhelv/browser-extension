@@ -146,8 +146,10 @@ async function createTimeEntry(entry: Omit<CreateTimeEntryBody, "member_id">) {
     // touched the shared currentTimeEntry state, so the top TimeTrackerControls
     // stayed stale (showing idle) until the popup was closed and reopened. Sync
     // the newly running entry into the shared state and refresh the queries so
-    // the header flips to the active state immediately.
-    if (response?.data) {
+    // the header flips to the active state immediately. Only adopt a *running*
+    // entry (no end) - this same callback also adds completed/manual rows, which
+    // must not hijack the header.
+    if (response?.data && !response.data.end) {
         currentTimeEntry.value = { ...response.data };
     }
     await queryClient.invalidateQueries({ queryKey: ["currentTimeEntry"] });

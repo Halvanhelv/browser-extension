@@ -268,14 +268,14 @@ export async function injectJiraTimeTrackingButton(
     return;
   }
 
-  // Remove existing button if present
-  if (existingButton) {
-    existingButton.remove();
-  }
-
   // Prefer the popup-written storage signal so a timer started/stopped in the
-  // popup is reflected here; falls back to the API on first use.
+  // popup is reflected here; falls back to the API on first use. Resolve BEFORE
+  // removing the old node: this awaits (a storage round-trip), and the removal
+  // observer would see the button missing and inject a duplicate. Remove +
+  // append happen synchronously below, so the observer never sees a gap.
   const isTracking = await resolveIsTracking(issueDescription);
+
+  document.getElementById(BUTTON_WRAPPER_ID)?.remove();
 
   // Create the button
   const buttonWrapper = createJiraTimeTrackingButton(
@@ -325,21 +325,33 @@ async function handleJiraTrackingClick(
       // Stop current time entry
       const currentEntry = await getCurrentTimeEntry();
       if (currentEntry?.data?.id) {
-        await client.updateTimeEntry(
-          {
-            ...currentEntry.data,
-            end: dayjs.utc().format(),
-          },
-          {
-            params: {
-              organization: currentEntry.data.organization_id,
-              timeEntry: currentEntry.data.id,
+        // Only stop if the running timer is actually this issue's - storage can
+        // be stale, which would otherwise stop an unrelated running timer.
+        if (currentEntry.data.description === issueDescription) {
+          await client.updateTimeEntry(
+            {
+              ...currentEntry.data,
+              end: dayjs.utc().format(),
             },
-          },
-        );
+            {
+              params: {
+                organization: currentEntry.data.organization_id,
+                timeEntry: currentEntry.data.id,
+              },
+            },
+          );
+          await writeActiveEntry(null);
+        } else {
+          // A different timer is running - reconcile storage to reality so this
+          // issue's button corrects to "Start" without touching that timer.
+          await writeActiveEntry({
+            id: currentEntry.data.id,
+            description: currentEntry.data.description ?? "",
+          });
+        }
+      } else {
+        await writeActiveEntry(null);
       }
-      // Broadcast the stop so the popup and other tabs' buttons revert.
-      await writeActiveEntry(null);
     } else {
       // Start new time entry
       const storage = await browser.storage.local.get([

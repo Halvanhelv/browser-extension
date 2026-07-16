@@ -129,6 +129,10 @@ function styleGithubTimeTrackingButton(
     ? SOLIDTIME_ACCENT.dark
     : SOLIDTIME_ACCENT.light;
 
+  // Keep the running state on the element so the click handler and the
+  // focus-driven resync read one source of truth instead of a stale closure.
+  button.dataset.tracking = String(isTracking);
+
   button.style.cssText = `display: inline-flex; align-items: center; gap: 6px; padding: 5px 14px; margin-top: 8px; border-radius: 9999px; border: 1px solid ${theme.border}; background: ${theme.background}; color: ${theme.text}; font-size: 12px; font-weight: 500; line-height: 1; cursor: pointer; transition: background-color 0.15s ease;`;
   button.innerHTML = `${isTracking ? STOP_ICON_SVG : PLAY_ICON_SVG}<span>${isTracking ? "Stop Timer" : "Start Timer"}</span>`;
 
@@ -152,6 +156,9 @@ function createGithubTimeTrackingSection(
   const section = document.createElement("div");
   section.id = SECTION_ID;
   section.className = classes.sectionClass;
+  // Stash the description so the focus-driven resync can recompute whether this
+  // issue is the one currently being tracked without a captured closure.
+  section.dataset.issueDescription = issueDescription;
 
   const heading = document.createElement("h3");
   heading.className = classes.headingClass;
@@ -189,7 +196,9 @@ export async function injectGithubTimeTrackingSection(
   try {
     if (accessToken.value) {
       const currentEntry = await getCurrentTimeEntry();
-      isTracking = currentEntry?.data?.id ? true : false;
+      // Match on description, not just "any timer running" - otherwise starting
+      // a timer on one issue marks every issue's button as tracking.
+      isTracking = currentEntry?.data?.description === issueDescription;
     }
   } catch (error) {
     console.error("Failed to get current time entry:", error);
@@ -207,9 +216,45 @@ export async function injectGithubTimeTrackingSection(
   const button = document.getElementById(BUTTON_ID);
   if (button) {
     button.addEventListener("click", () =>
-      handleGithubTrackingClick(issueDescription, isTracking),
+      // Read the live state off the element - the focus resync can flip it
+      // after injection, so a captured isTracking would go stale.
+      handleGithubTrackingClick(
+        issueDescription,
+        button.dataset.tracking === "true",
+      ),
     );
   }
+}
+
+/**
+ * Re-checks whether the sidebar section's issue is the one currently being
+ * tracked and restyles its button to match. Called when the GitHub tab regains
+ * focus, so stopping a timer from the extension popup (a separate context that
+ * the content script can't observe) is reflected back on the page button.
+ */
+export async function refreshGithubSidebarButtonState(): Promise<void> {
+  const section = document.getElementById(SECTION_ID);
+  const button = document.getElementById(BUTTON_ID) as HTMLButtonElement | null;
+  if (!section || !button) {
+    return;
+  }
+
+  const issueDescription = section.dataset.issueDescription || "";
+  let isTracking = false;
+  if (accessToken.value) {
+    try {
+      const currentEntry = await getCurrentTimeEntry();
+      isTracking = currentEntry?.data?.description === issueDescription;
+    } catch (error) {
+      console.error(
+        "Solidtime: Failed to refresh sidebar button state:",
+        error,
+      );
+      return;
+    }
+  }
+
+  styleGithubTimeTrackingButton(button, isTracking);
 }
 
 /**

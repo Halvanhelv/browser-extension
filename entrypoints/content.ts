@@ -48,6 +48,8 @@ import {
   observeGithubProjectPanel,
   isGithubProjectPage,
   observeGithubBoardCards,
+  refreshGithubSidebarButtonState,
+  refreshGithubBoardCardButtons,
 } from "./utils/github";
 
 export default defineContentScript({
@@ -75,6 +77,7 @@ export default defineContentScript({
       initializeGithub();
       initializeGithubProjectPanel();
       initializeGithubProjectCardButtons();
+      initializeGithubFocusSync();
     }
   },
 });
@@ -417,6 +420,24 @@ function initializeGithubProjectPanel() {
   observeGithubProjectPanel(() => {
     handlePanelChange();
   });
+}
+
+// Re-syncs injected GitHub button state when the tab regains focus. Stopping a
+// timer from the extension popup happens in a separate context the content
+// script can't observe, so the sidebar/board buttons would otherwise stay stuck
+// on "Stop Timer" until the next navigation. Both refreshers no-op when their
+// targets aren't present, so this is safe on any GitHub page.
+function initializeGithubFocusSync() {
+  const sync = () => {
+    if (document.visibilityState !== "visible") {
+      return;
+    }
+    refreshGithubSidebarButtonState();
+    refreshGithubBoardCardButtons();
+  };
+
+  document.addEventListener("visibilitychange", sync);
+  window.addEventListener("focus", sync);
 }
 
 // GitHub Projects v2 board - per-card Start/Stop button.

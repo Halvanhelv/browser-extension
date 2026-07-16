@@ -2,7 +2,7 @@
   "name": "solidtime-browser-extension",
   "description": "Official Browser Extension for solidtime",
   "private": true,
-  "version": "0.0.15",
+  "version": "0.0.16",
   "type": "module",
   "scripts": {
     "dev": "wxt",

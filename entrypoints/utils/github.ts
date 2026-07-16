@@ -2,11 +2,16 @@
  * GitHub-specific utilities for detecting issue/PR pages and extracting issue information
  */
 
-import { apiClient } from "./api";
+import { apiClient, describeToggleError } from "./api";
 import { getCurrentTimeEntry, getLastUsedProjectId } from "./timeEntries";
 import type { CreateTimeEntryBody } from "@solidtime/api";
 import { accessToken } from "./oauth";
 import { dayjs } from "./dayjs";
+import {
+  resolveIsTracking,
+  readActiveEntryDescription,
+  writeActiveEntry,
+} from "./activeEntry";
 
 export interface GithubIssueInfo {
   issueKey: string;
@@ -192,17 +197,9 @@ export async function injectGithubTimeTrackingSection(
     existingSection.remove();
   }
 
-  let isTracking = false;
-  try {
-    if (accessToken.value) {
-      const currentEntry = await getCurrentTimeEntry();
-      // Match on description, not just "any timer running" - otherwise starting
-      // a timer on one issue marks every issue's button as tracking.
-      isTracking = currentEntry?.data?.description === issueDescription;
-    }
-  } catch (error) {
-    console.error("Failed to get current time entry:", error);
-  }
+  // Prefer the popup-written storage signal so a timer started/stopped in the
+  // popup is reflected here; falls back to the API on first use.
+  const isTracking = await resolveIsTracking(issueDescription);
 
   const section = createGithubTimeTrackingSection(
     issueDescription,
@@ -240,20 +237,7 @@ export async function refreshGithubSidebarButtonState(): Promise<void> {
   }
 
   const issueDescription = section.dataset.issueDescription || "";
-  let isTracking = false;
-  if (accessToken.value) {
-    try {
-      const currentEntry = await getCurrentTimeEntry();
-      isTracking = currentEntry?.data?.description === issueDescription;
-    } catch (error) {
-      console.error(
-        "Solidtime: Failed to refresh sidebar button state:",
-        error,
-      );
-      return;
-    }
-  }
-
+  const isTracking = await resolveIsTracking(issueDescription);
   styleGithubTimeTrackingButton(button, isTracking);
 }
 
@@ -288,6 +272,8 @@ async function toggleGithubTimeEntry(
         },
       );
     }
+    // Broadcast the stop so the popup and other tabs' buttons revert.
+    await writeActiveEntry(null);
     return;
   }
 
@@ -315,10 +301,15 @@ async function toggleGithubTimeEntry(
     billable: false,
   };
 
-  await client.createTimeEntry(timeEntryData, {
+  const created = await client.createTimeEntry(timeEntryData, {
     params: {
       organization: organizationId,
     },
+  });
+  // Broadcast the start so the popup and other tabs' buttons reflect it.
+  await writeActiveEntry({
+    id: created?.data?.id ?? "",
+    description: issueDescription,
   });
 }
 
@@ -331,7 +322,7 @@ function alertGithubToggleError(error: unknown): void {
     alert("Please select an organization in the Solidtime extension first");
     return;
   }
-  alert("Failed to toggle time tracking. Please make sure you are logged in.");
+  alert(`Solidtime: failed to toggle time tracking (${describeToggleError(error)})`);
 }
 
 /**
@@ -599,6 +590,13 @@ const BOARD_ENTRY_CACHE_MS = 5000;
 async function getBoardCurrentEntryDescription(
   forceFresh: boolean,
 ): Promise<string | null> {
+  // Prefer the popup-written storage signal - instant, no request, and reflects
+  // popup start/stop that the content script can't otherwise observe.
+  const stored = await readActiveEntryDescription();
+  if (stored !== undefined) {
+    return stored;
+  }
+
   if (
     !forceFresh &&
     boardEntryCache &&

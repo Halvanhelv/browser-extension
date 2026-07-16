@@ -17,6 +17,7 @@ import { useLiveTimer } from "../../utils/liveTimer";
 import { useCurrentTimeEntryUpdateMutation } from "../../utils/timeEntries";
 import { getCurrentTimeEntry } from "../../utils/timeEntries";
 import { emptyTimeEntry } from "../../utils/timeEntries";
+import { writeActiveEntry } from "../../utils/activeEntry";
 import { dayjs } from "../../utils/dayjs";
 import type {
     CreateClientBody,
@@ -239,13 +240,27 @@ watch(currentTimeEntryResponseIsError, () => {
     const status = (currentTimeEntryResponseError.value as {
         response?: { status?: number };
     } | null)?.response?.status;
-    if (status === 404 && currentTimeEntry.value.id !== '') {
-        currentTimeEntry.value = { ...emptyTimeEntry };
+    if (status === 404) {
+        // Server confirms no active timer - tell content-script buttons to
+        // revert, and drop a stale running entry from the header (but keep an
+        // unsaved draft with no id).
+        writeActiveEntry(null);
+        if (currentTimeEntry.value.id !== '') {
+            currentTimeEntry.value = { ...emptyTimeEntry };
+        }
     }
 });
 
 watch(currentTimeEntryResponse, () => {
     const serverEntry = currentTimeEntryResponse.value?.data;
+    // Mirror the active entry into chrome.storage so host-page content scripts
+    // (GitHub/Jira/Linear/Plane buttons) reflect popup start/stop live - they run
+    // in a separate context and can't observe the popup any other way.
+    writeActiveEntry(
+        serverEntry
+            ? { id: serverEntry.id, description: serverEntry.description ?? "" }
+            : null,
+    );
     if (serverEntry) {
         // Adopt the server row only when it's a *different* active entry (or we
         // have none locally). If it's the same entry the user is editing in the

@@ -575,7 +575,8 @@ async function handleGithubCardButtonClick(
 
   try {
     await toggleGithubTimeEntry(issueDescription, isCurrentlyTracking);
-    await refreshGithubBoardCardButtons();
+    // Just changed server state - bypass the cache so buttons reflect it now.
+    await refreshGithubBoardCardButtons(true);
   } catch (error) {
     console.error(
       "Solidtime: Failed to toggle time tracking from board card:",
@@ -588,30 +589,61 @@ async function handleGithubCardButtonClick(
   }
 }
 
-/**
- * Injects a compact Start/Stop button into every rendered board card and
- * syncs existing buttons' state against the current time entry. Board cards
- * are virtualized (GitHub only renders a card's header once it scrolls into
- * view), so this must be re-run on every board mutation, not just once.
- */
-export async function refreshGithubBoardCardButtons(): Promise<void> {
-  const cards = document.querySelectorAll<HTMLElement>("[data-board-card-id]");
-  if (cards.length === 0) {
-    return;
+// Cache the current-entry lookup so a burst of board mutations (virtualization,
+// hover, drag reorders) doesn't fire one getCurrentTimeEntry request per
+// animation frame. forceFresh bypasses it after a toggle or on tab focus, where
+// up-to-date tracking state matters.
+let boardEntryCache: { description: string | null; at: number } | null = null;
+const BOARD_ENTRY_CACHE_MS = 5000;
+
+async function getBoardCurrentEntryDescription(
+  forceFresh: boolean,
+): Promise<string | null> {
+  if (
+    !forceFresh &&
+    boardEntryCache &&
+    Date.now() - boardEntryCache.at < BOARD_ENTRY_CACHE_MS
+  ) {
+    return boardEntryCache.description;
   }
 
-  let currentEntryDescription: string | null = null;
+  let description: string | null = null;
   if (accessToken.value) {
     try {
       const currentEntry = await getCurrentTimeEntry();
-      currentEntryDescription = currentEntry?.data?.description || null;
+      description = currentEntry?.data?.description || null;
     } catch (error) {
       console.error(
         "Solidtime: Failed to get current time entry for board cards:",
         error,
       );
+      // Keep serving the last known value rather than flapping buttons to idle.
+      return boardEntryCache?.description ?? null;
     }
   }
+
+  boardEntryCache = { description, at: Date.now() };
+  return description;
+}
+
+/**
+ * Injects a compact Start/Stop button into every rendered board card and
+ * syncs existing buttons' state against the current time entry. Board cards
+ * are virtualized (GitHub only renders a card's header once it scrolls into
+ * view), so this must be re-run on every board mutation, not just once.
+ * The current-entry lookup is cached (see getBoardCurrentEntryDescription);
+ * pass forceFresh after a toggle or on focus to bypass it.
+ */
+export async function refreshGithubBoardCardButtons(
+  forceFresh = false,
+): Promise<void> {
+  const cards = document.querySelectorAll<HTMLElement>("[data-board-card-id]");
+  if (cards.length === 0) {
+    return;
+  }
+
+  const currentEntryDescription =
+    await getBoardCurrentEntryDescription(forceFresh);
 
   cards.forEach((card) => {
     const issueInfo = parseGithubCardIssueInfo(card);

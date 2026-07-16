@@ -52,9 +52,17 @@ export function useTimer() {
      */
     async function stopTimer(endTime?: string) {
         const stoppedTimeEntry = { ...currentTimeEntry.value }
-        currentMembershipId.value = memberships.value.find(
+        // Point the membership at the stopped entry's org so the stop mutation
+        // targets the right organization - but only if we actually find it.
+        // Assigning undefined here (e.g. removed from that org) would blank out
+        // currentMembershipId, null the derived org id, and make the very stop
+        // mutation below throw "No current organization id".
+        const stoppedMembershipId = memberships.value.find(
             (membership) => membership.organization.id === stoppedTimeEntry.organization_id
         )?.id
+        if (stoppedMembershipId) {
+            currentMembershipId.value = stoppedMembershipId
+        }
         currentTimeEntry.value = { ...emptyTimeEntry }
 
         await timeEntryStop.mutateAsync({
